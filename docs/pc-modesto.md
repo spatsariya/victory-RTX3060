@@ -48,32 +48,62 @@ mas ataca exatamente o que trava um PC de 16 GB.
 .\scripts\play.ps1 -Exe 'C:\caminho\da\sua\copia\do\jogo.exe' -Leve
 ```
 
-- Fechou sozinho ou travou? Tente de novo com `-Leve -Safe`.
-- Ainda pesado? Uma TV de 720p em vez de 1080p: `-Leve -Display 1280x720`.
-- O perfil Series S deu problema (tela preta, fecha ao carregar o mundo)?
-  Mantenha o resto do perfil com o Series X: `-Leve -Console series-x`.
-- A primeira vez com `-Leve` engasga mais: o jogo cria pipelines que as
-  corridas com o Series X nunca criaram, e o driver compila cada uma. Depois
-  de uma sessão, deixe-as prontas:
+O `-Leve` vai em níveis (`-Nivel 1` a `4`, 1 se nada for dito). Cada um soma
+ao anterior. Os dois primeiros não mudam o jeito como o jogo monta e entrega
+a imagem; os dois últimos mudam, e ninguém os testou.
+
+| Nível | Soma | Risco |
+|---|---|---|
+| 1 (padrão) | A resolução dinâmica do jogo baixa; menos listas paradas em RAM. | Baixo: o jogo desenha do mesmo jeito, só em resolução menor. |
+| 2 | Texturas na placa só com os níveis que o jogo usa: 2 a 3 GB livres na placa de 12 GB. | Médio: só foi testado numa placa AMD. |
+| 3 | Saída em 1080p em vez de 4K. | Alto: nunca testado. |
+| 4 | Perfil do Series S. | Alto: nunca testado no mundo do jogo. |
+
+O primeiro `-Leve` era o nível 4 inteiro, mais uma espera de pipelines de
+24 ms, e deixou a tela preta com o som tocando. O mais provável é que tenha
+sido a saída 1080p ou o Series S, os dois ajustes que mudam como o jogo
+entrega a imagem; por isso estão no fim.
+
+Como testar (um minuto por nível, até o mundo carregar):
+
+1. Rode `-Leve`. Se a imagem aparecer, tente `-Leve -Nivel 2`, depois `3` e `4`.
+2. Fique no maior nível que mostra a imagem.
+3. Se até o nível 1 ficar preto, rode sem `-Leve`: se a imagem voltar, o
+   culpado é o nível 1; se não, o problema é outro.
+
+Cada partida deixa um registro em `%LOCALAPPDATA%\victory\logs` (os 10 mais
+novos ficam). Quando o jogo fecha, o script diz se a placa de vídeo caiu, se o
+emulador não conseguiu mostrar a imagem, ou se o jogo entregou a imagem em mais
+de um plano (o emulador só mostra o primeiro: tela preta com som). Se ficar
+preto, mande esse arquivo junto com o nível que usou.
+
+Outros ajustes, à parte dos níveis:
+
+- Fechou sozinho ou travou? Some `-Safe`.
+- `-Display 1280x720` ou `-Console series-s` aplicam só aquele ajuste, em
+  qualquer nível.
+- Engasgos enquanto o driver compila pipelines: depois de uma sessão, deixe-as
+  prontas para a próxima:
 
   ```powershell
   target\diag\victory.exe warm --used
   ```
 
-## 3. O que o `-Leve` muda
+## 3. O que cada ajuste faz
 
-| Ajuste | O que faz |
-|---|---|
-| `--console series-s` | O jogo escolhe resolução, detalhe e orçamento de memória pelo console em que acha que está. No Series S ele tem 7,6 GB em vez de 13,5 GB: menos RAM, menos memória da placa, menos coisa a desenhar. (No PC do README, preso no processador e com 64 GB, isso não ajudou; aqui a parede é outra.) |
-| `VICTORY_DISPLAY_MODE=1920x1080` | O console informa uma TV 1080p em vez de 4K: a saída do jogo, o alvo do upscaler e os passes de tela ficam em 1080p. `-Display` troca o tamanho. |
-| `VICTORY_GPU_LOAD_MS=45` | O jogo mede o tempo da placa com timestamps para ajustar a resolução dinâmica. Aqui todos eles são gravados juntos quando o frame termina, então o jogo acha que a placa não fez nada e nunca baixa a resolução. Com 45 ms, acima dos 33 ms que ele quer, ele baixa a resolução interna. |
-| `VICTORY_LEVELS_ON_DEMAND=1` | Cópias das texturas na placa só com os níveis que o jogo tem de fato: de 2 a 3 GB livres numa placa de 12 GB. |
-| `VICTORY_PIPELINE_WAIT_MS=24` | No máximo 24 ms por frame esperando pipelines que ainda estão sendo feitas (500 ms por padrão): um objeto pode faltar por um ou dois frames, em vez de o frame inteiro parar. |
-| `VICTORY_LIST_IDLE=256` | Metade das listas paradas guardadas (512 por padrão). Cada uma segura a memória da maior gravação que já fez, toda em RAM. |
+| Ajuste | Nível | O que faz |
+|---|---|---|
+| `VICTORY_GPU_LOAD_MS=45` | 1 | O jogo mede o tempo da placa com timestamps para ajustar a resolução dinâmica. Aqui todos eles são gravados juntos quando o frame termina, então o jogo achava que a placa não fazia nada e nunca baixava a resolução. Com 45 ms, acima dos 33 ms que ele quer, ele baixa a resolução interna. |
+| `VICTORY_LIST_IDLE=256` | 1 | Metade das listas paradas guardadas (512 por padrão). Cada uma segura a memória da maior gravação que já fez, toda em RAM. |
+| `VICTORY_LEVELS_ON_DEMAND=1` | 2 | Cópias das texturas na placa só com os níveis que o jogo tem de fato. |
+| `VICTORY_DISPLAY_MODE=1920x1080` | 3 | O console informa uma TV 1080p em vez de 4K: a saída do jogo, o alvo do upscaler e os passes de tela ficam em 1080p. |
+| `--console series-s` | 4 | O jogo escolhe resolução, detalhe e orçamento de memória pelo console em que acha que está. No Series S ele tem 7,6 GB em vez de 13,5 GB. |
 
 O ray tracing continua desligado (ele custa uns 40 ms por frame na placa), e a
 luz ambiente que o substitui (`VICTORY_AMBIENT`) continua ligada: custa quase
-nada.
+nada. A espera por pipelines voltou aos 500 ms normais; quem quiser trocar
+engasgos por objetos que faltam por um ou dois frames pode usar
+`-More @{VICTORY_PIPELINE_WAIT_MS='100'}`.
 
 ## 4. Tirar shaders
 
@@ -126,3 +156,18 @@ vai o tempo do frame.
 - Uma build de release (`cargo build --locked --release -p victory` e
   `-Build release`) não tem os diagnósticos e pode ser um pouco mais rápida,
   mas não tem `-SkipShaders`.
+
+## 6. Medir antes de mexer mais
+
+Abaixar a qualidade só ajuda enquanto a placa é a parede. Boa parte do frame é
+trabalho do emulador (traduzir as chamadas do jogo, achar e copiar o que o
+processador e a placa escreveram), e isso não diminui com a resolução. Para
+saber qual parede é a sua:
+
+1. Jogue o mesmo trecho com `-Leve` e com `-Leve -Display 1280x720`. Se o FPS
+   quase não mudar, a placa não é a parede.
+2. Aperte **F3** no jogo: o painel no canto mostra para onde vai o tempo do
+   frame. Tire um print dele parado num lugar.
+3. No **Gerenciador de Tarefas**, aba Desempenho, anote a Memória (em uso e
+   confirmada), o Disco do arquivo de paginação e, na GPU, "Memória dedicada da
+   GPU" e a utilização.

@@ -2,21 +2,23 @@
 #   scripts\play.ps1 -Exe <path of your own copy's executable>
 # -Safe         without the newer, faster ways (the first thing to try when something is wrong)
 # -RayTracing   the title's own ray-traced indirect light: lit interiors, about a third slower
-# -Low (-Leve)  for a modest PC (16 GB of RAM, a 12 GB card such as the RTX 3060): worse picture,
-#               less memory; what it sets and why: docs/pc-modesto.md
+# -Low (-Leve)  for a modest PC (16 GB of RAM, a 12 GB card such as the RTX 3060), in steps
+#               (-Level/-Nivel 1 to 4, 1 unless told): each adds to the one before, the later
+#               ones change the picture the title makes and are untried; docs/pc-modesto.md
 # -Console      series-x (default) or series-s: the console the title believes it runs on
-#               (-Low picks series-s unless told)
-# -Display WxH  the television the console reports (-Low: 1920x1080; 1280x720 is lighter still)
+# -Display WxH  the television the console reports (3840x2160 unless told)
 # -SkipShaders  names of the title's programs whose draws and dispatches are left out
 #               (VICTORY_SKIP_NAMED, diag build only): -SkipShaders 'CS_Name1,PS_Name2'
 # -Build        target\diag (the default, the build all measurements are of) or target\release
 # -More         other settings: -More @{VICTORY_PANEL='1'}
+# Every run's log goes to %LOCALAPPDATA%\victory\logs as well; what went wrong is said at the end.
 # Run it from a normal window, not as administrator: the driver then keeps its shader cache elsewhere.
 param(
     [Parameter(Mandatory)][string]$Exe,
     [switch]$Safe,
     [switch]$RayTracing,
     [Alias('Leve')][switch]$Low,
+    [Alias('Nivel')][ValidateRange(1, 4)][int]$Level = 1,
     [ValidateSet('series-x', 'series-s')][string]$Console,
     [ValidatePattern('^\d{3,4}[xX]\d{3,4}$')][string]$Display,
     [Alias('TirarShaders')][string]$SkipShaders,
@@ -36,24 +38,25 @@ if ($Safe) {
 }
 if ($RayTracing) { $settings.VICTORY_BVH_BUILDER = '1' }
 if ($Low) {
-    # The title picks its resolution, detail and memory budgets by the console it is on.
-    if (-not $Console) { $Console = 'series-s' }
-    # A 1080p television: the title's output, its upscaler's target and its screen passes at 1080p, not 4K.
-    $settings.VICTORY_DISPLAY_MODE = '1920x1080'
-    # Every pair of GPU timestamps the title asks for says the card did nothing (all are written
-    # when the frame lands), so its dynamic resolution never comes down. 45 ms, over its 33 ms
-    # budget, makes it look busy: the title lowers what it renders at.
+    # 1: what the title draws stays as it is. Every pair of GPU timestamps the title asks for said
+    # the card did nothing (all are written when the frame lands), so its dynamic resolution never
+    # came down; 45 ms, over its 33 ms budget, makes it lower what it renders at. Fewer idle host
+    # lists, each with the memory of its largest recording (512 by default).
     $settings.VICTORY_GPU_LOAD_MS = '45'
-    # Texture levels on the card only as the title holds them: 2 to 3 GB of a 12 GB card free.
-    $settings.VICTORY_LEVELS_ON_DEMAND = '1'
-    # At most 24 ms a frame waiting for pipelines still being made (500 by default): a draw whose
-    # pipeline is not ready is left out for a frame or two instead of the frame standing still.
-    $settings.VICTORY_PIPELINE_WAIT_MS = '24'
-    # Fewer idle host lists, each with the memory of its largest recording (512 by default).
     $settings.VICTORY_LIST_IDLE = '256'
+    # 2: texture levels on the card only as the title holds them, 2 to 3 GB of a 12 GB card
+    # (tried on an AMD card only).
+    if ($Level -ge 2) { $settings.VICTORY_LEVELS_ON_DEMAND = '1' }
+    # 3: a 1080p television: the title's output and screen passes at 1080p, not 4K (untried).
+    if ($Level -ge 3 -and -not $Display) { $Display = '1920x1080' }
+    # 4: the Series S profile (untried in the world): less memory, lower resolution and detail.
+    # The first -Low, which was all four with a 24 ms pipeline wait, showed a black picture.
+    if ($Level -ge 4 -and -not $Console) { $Console = 'series-s' }
     if ($RayTracing) {
         Write-Host 'Aviso: -RayTracing custa cerca de 40 ms por frame na placa; com -Leve o melhor e deixa-lo desligado.'
     }
+} elseif ($PSBoundParameters.ContainsKey('Level')) {
+    Write-Host 'Aviso: -Nivel so vale junto com -Leve.'
 }
 if ($Display) { $settings.VICTORY_DISPLAY_MODE = $Display.ToLower() }
 if ($SkipShaders) {
@@ -81,6 +84,19 @@ try {
     }
 } catch {}
 
+# The log of this run, outside the repository (it names the title's code); the ten newest are kept.
+$log = $null
+if ($env:LOCALAPPDATA -and -not $settings.ContainsKey('VICTORY_LOG_FILE')) {
+    $logs = Join-Path $env:LOCALAPPDATA 'victory\logs'
+    try {
+        New-Item -ItemType Directory -Force -Path $logs -ErrorAction Stop | Out-Null
+        Get-ChildItem $logs -Filter 'play-*.log' | Sort-Object LastWriteTime -Descending |
+            Select-Object -Skip 9 | Remove-Item -ErrorAction SilentlyContinue
+        $log = Join-Path $logs ("play-{0}.log" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+        $settings.VICTORY_LOG_FILE = $log
+    } catch { $log = $null }
+}
+
 # (Other settings left over in this window go; where your files are stays.)
 $paths = 'VICTORY_CONFIG', 'VICTORY_GAME_DIR', 'VICTORY_CACHE_DIR', 'VICTORY_DATA_DIR'
 Get-ChildItem Env:VICTORY_* | Where-Object { $_.Name -notin $paths } | ForEach-Object { Remove-Item "Env:$($_.Name)" }
@@ -88,9 +104,42 @@ foreach ($k in $settings.Keys) { Set-Item "Env:$k" $settings[$k] }
 $Exe = (Resolve-Path $Exe).Path
 $arguments = @('run', $Exe, '--execute')
 if ($Console) { $arguments += @('--console', $Console) }
-if ($Low) {
-    $shown = ($settings.Keys | Where-Object { $_ -in 'VICTORY_DISPLAY_MODE', 'VICTORY_GPU_LOAD_MS', 'VICTORY_LEVELS_ON_DEMAND', 'VICTORY_PIPELINE_WAIT_MS', 'VICTORY_LIST_IDLE', 'VICTORY_SKIP_NAMED' } | Sort-Object | ForEach-Object { "$_=$($settings[$_])" }) -join ' '
-    Write-Host "Perfil leve: console $Console, $shown"
+$shown = ($settings.Keys | Where-Object { $_ -ne 'VICTORY_LOG_FILE' } | Sort-Object | ForEach-Object { "$_=$($settings[$_])" }) -join ' '
+$what = if ($Low) { "Perfil leve, nivel $Level" } else { 'Perfil normal' }
+$consoleName = if ($Console) { $Console } else { 'series-x' }
+Write-Host "$what, console $consoleName"
+if ($log) {
+    Set-Content -Path $log -Value "play.ps1: $what, console $consoleName, build $Build`r`n$shown`r`n" -ErrorAction SilentlyContinue
+    Write-Host "Registro: $log"
 }
+
+# What the log says went wrong, once the title has ended (or the window was closed with Ctrl+C).
+function Show-Outcome {
+    if (-not $log -or -not (Test-Path $log)) { return }
+    $found = { param($text) [bool](Select-String -Path $log -Pattern $text -SimpleMatch -Quiet) }
+    $frames = @(Select-String -Path $log -Pattern 'frame presented' -SimpleMatch).Count
+    Write-Host ''
+    Write-Host "Fim da partida. Registro: $log"
+    if (& $found 'device removed') {
+        Write-Host '  A placa de video caiu (device removed): rode de novo com um nivel menor, ou com -Safe.'
+    }
+    if ((& $found 'cannot present this format') -or (& $found 'no swap chain') -or (& $found 'swap chain not resized')) {
+        Write-Host '  O emulador nao conseguiu mostrar a imagem que o jogo entregou: use -Nivel 2 ou menos'
+        Write-Host '  (os niveis 3 e 4 mudam a saida do jogo).'
+    }
+    if (& $found 'more than one plane') {
+        Write-Host '  O jogo entregou a imagem em mais de um plano, e o emulador mostra so o primeiro:'
+        Write-Host '  e o que deixa a tela preta. Use -Nivel 2 ou menos.'
+    }
+    if ($frames -eq 0) {
+        Write-Host '  O jogo nao apresentou nenhum frame.'
+    }
+    if ($Low -and $Level -gt 1) {
+        Write-Host "  Se a tela ficou preta: rode com -Leve -Nivel $($Level - 1) e mande este registro."
+    } elseif ($Low) {
+        Write-Host '  Se a tela ficou preta: rode sem -Leve, para ver se a imagem volta, e mande este registro.'
+    }
+}
+
 Push-Location (Join-Path $PSScriptRoot '..')   # victory.toml is looked for here
-try { & $victory @arguments } finally { Pop-Location }
+try { & $victory @arguments } finally { Pop-Location; Show-Outcome }

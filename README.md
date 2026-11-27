@@ -14,11 +14,13 @@ or publisher.
 .\scripts\play.ps1 -Exe 'C:\caminho\do\jogo.exe' -Leve
 ```
 
-Imagem pior e menos memória: perfil do Series S, saída 1080p, a resolução
-dinâmica do jogo forçada para baixo, texturas na placa só com os níveis que o
-jogo usa, menos espera por pipelines. `-Display 1280x720` alivia mais;
-`-SkipShaders 'Nome'` tira programas do jogo pelo nome. Antes de jogar com
-16 GB, aumente a memória virtual. Tudo em [docs/pc-modesto.md](docs/pc-modesto.md).
+Em níveis, do mais seguro ao mais leve (`-Nivel 1` a `4`, 1 se nada for
+dito): 1, a resolução dinâmica do jogo para baixo; 2, texturas na placa só com
+os níveis que o jogo usa; 3, saída 1080p; 4, perfil do Series S. Os níveis 3 e
+4 nunca foram testados (os quatro juntos deram tela preta). Cada partida deixa
+um registro em `%LOCALAPPDATA%\victory\logs`, e o script diz no fim o que deu
+errado. `-SkipShaders 'Nome'` tira programas do jogo pelo nome. Antes de jogar
+com 16 GB, aumente a memória virtual. Tudo em [docs/pc-modesto.md](docs/pc-modesto.md).
 
 ## NVIDIA hybrid branch: local test configuration (2026-11-26)
 
