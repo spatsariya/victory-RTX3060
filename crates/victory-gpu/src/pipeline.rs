@@ -64,6 +64,10 @@ pub(crate) struct Shader {
     /// Its part in the stand-in for the indirect light.
     #[cfg(windows)]
     pub(crate) ambient: Option<crate::ambient::Role>,
+    /// The name of `VICTORY_SKIP_NAMED` its container holds, if any: its
+    /// draws and dispatches are left out ([`is_skipped`]).
+    #[cfg(all(windows, feature = "diagnostics"))]
+    skip_name: Option<&'static str>,
     #[cfg(windows)]
     translated: OnceLock<Option<Translated>>,
 }
@@ -116,6 +120,8 @@ fn shader(stage: &'static str, bytes: &[u8]) -> Arc<Shader> {
                 container: bytes.to_vec(),
                 #[cfg(windows)]
                 ambient: (stage == "compute").then(|| crate::ambient::role(bytes)).flatten(),
+                #[cfg(all(windows, feature = "diagnostics"))]
+                skip_name: skip_name_in(bytes, &full),
                 #[cfg(windows)]
                 translated: OnceLock::new(),
             })
@@ -489,19 +495,70 @@ fn parse_skip_hashes(value: &str) -> Vec<String> {
 }
 
 #[cfg(all(windows, feature = "diagnostics"))]
-fn skipped_shader(p: &Pipeline) -> Option<&str> {
+fn skip_hashes() -> &'static [String] {
     static HASHES: OnceLock<Vec<String>> = OnceLock::new();
-    let hashes = HASHES.get_or_init(|| {
+    HASHES.get_or_init(|| {
         let value = std::env::var("VICTORY_SKIP_PIPELINES").unwrap_or_default();
         parse_skip_hashes(&value)
-    });
-    if hashes.is_empty() {
+    })
+}
+
+/// Names of the title's programs as their containers hold them (the name the
+/// console's compiler gave the entry point, `CS_AccumulateLocalLightInscatteringVolume`
+/// say; `victory shader-info <archives> --verbose` lists them), separated by
+/// commas. Every program whose container holds one of them, as a part of a
+/// longer name too (so all variants of a program at once), is left out like
+/// the shaders of `VICTORY_SKIP_PIPELINES`.
+#[cfg(all(windows, feature = "diagnostics"))]
+fn parse_skip_names(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|name| {
+            // Shorter names would be found by chance in the code's bytes.
+            let fits = name.len() >= 6 && name.bytes().all(|b| b.is_ascii_graphic());
+            if !name.is_empty() && !fits {
+                tracing::warn!(name, "VICTORY_SKIP_NAMED expects program names of 6 or more letters");
+            }
+            fits
+        })
+        .map(str::to_owned)
+        .collect()
+}
+
+#[cfg(all(windows, feature = "diagnostics"))]
+fn skip_names() -> &'static [String] {
+    static NAMES: OnceLock<Vec<String>> = OnceLock::new();
+    NAMES.get_or_init(|| {
+        let names = parse_skip_names(&std::env::var("VICTORY_SKIP_NAMED").unwrap_or_default());
+        if !names.is_empty() {
+            tracing::info!(?names, "draws and dispatches of programs with these names are left out (VICTORY_SKIP_NAMED)");
+        }
+        names
+    })
+}
+
+/// The first of [`skip_names`] in a shader's container, once when the
+/// container is first seen.
+#[cfg(all(windows, feature = "diagnostics"))]
+fn skip_name_in(container: &[u8], hash: &blake3::Hash) -> Option<&'static str> {
+    let name = skip_names()
+        .iter()
+        .find(|name| container.windows(name.len()).any(|w| w == name.as_bytes()))?;
+    tracing::info!(name = name.as_str(), hash = &hash.to_hex()[..16], "a program left out (VICTORY_SKIP_NAMED)");
+    Some(name.as_str())
+}
+
+#[cfg(all(windows, feature = "diagnostics"))]
+fn skipped_shader(p: &Pipeline) -> Option<&Shader> {
+    let hashes = skip_hashes();
+    if hashes.is_empty() && skip_names().is_empty() {
         return None;
     }
     p.shaders
         .iter()
-        .find(|shader| hashes.contains(&shader.hash))
-        .map(|shader| shader.hash.as_str())
+        .find(|shader| shader.skip_name.is_some() || hashes.contains(&shader.hash))
+        .map(|shader| &**shader)
 }
 
 #[cfg(all(windows, feature = "diagnostics"))]
@@ -518,7 +575,10 @@ pub(crate) fn note_drop(this: This) {
     } else {
         let p = pipeline(this);
         skipped_shader(p)
-            .map(|hash| format!("skipped shader {hash}"))
+            .map(|shader| match shader.skip_name {
+                Some(name) => format!("skipped shader {} ({name})", shader.hash),
+                None => format!("skipped shader {}", shader.hash),
+            })
             .or_else(|| make::missing(&p.host))
     };
     if let Some(why) = why {
@@ -797,6 +857,16 @@ mod tests {
         assert_eq!(
             super::parse_skip_hashes(" 0123456789ABCDEF, 0123456789abcde, xyz, 0011223344556677,"),
             ["0123456789abcdef", "0011223344556677"]
+        );
+    }
+
+    #[cfg(all(windows, feature = "diagnostics"))]
+    #[test]
+    fn skip_names_are_long_enough_not_to_be_found_by_chance() {
+        assert!(super::parse_skip_names(" , ").is_empty());
+        assert_eq!(
+            super::parse_skip_names(" CS_AccumulateLocalLightInscatteringVolume , CS_x, has space,PS_Bloom"),
+            ["CS_AccumulateLocalLightInscatteringVolume", "PS_Bloom"]
         );
     }
 
