@@ -887,6 +887,7 @@ extern "system" fn present(
     if !behind::on() {
         release_held(forces());
     }
+    note_planes(planes, plane_parameters);
     let frame = FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
     if frame.is_power_of_two() {
         let (draws, dispatches) = crate::list::take_counts();
@@ -979,6 +980,33 @@ extern "system" fn present(
     #[cfg(all(windows, feature = "diagnostics"))]
     frame_ends();
     S_OK
+}
+
+/// Logs how many planes, and resources in the first, the title presents,
+/// whenever that changes: only the first plane's first resource is shown,
+/// so a title that puts its picture in another plane (one it scales, under
+/// one for its interface) shows black here, with its sound going on.
+fn note_planes(planes: u32, parameters: *const Plane) {
+    static LAST: AtomicU64 = AtomicU64::new(u64::MAX);
+    let resources = if planes > 0 {
+        // SAFETY: the title passes `planes` plane descriptions (null is tolerated).
+        unsafe { parameters.as_ref() }.map_or(0, |p| p.count)
+    } else {
+        0
+    };
+    let now = (u64::from(planes) << 32) | u64::from(resources);
+    if LAST.swap(now, Ordering::Relaxed) == now {
+        return;
+    }
+    if planes > 1 || resources > 1 {
+        tracing::warn!(
+            planes,
+            resources,
+            "the title presents more than one plane or resource; only the first plane's first resource is shown"
+        );
+    } else {
+        tracing::info!(planes, resources, "what the title presents");
+    }
 }
 
 /// Diagnostics: the title's present is over.
